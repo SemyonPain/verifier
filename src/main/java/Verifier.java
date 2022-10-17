@@ -17,12 +17,15 @@ import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.Map;
 import java.util.Properties;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.FileHandler;
 import java.util.logging.Logger;
 
 public class Verifier {
 
     private static final DateTimeFormatter dtf = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
+
+    private static final SSLContext SSL_CONTEXT;
 
     public static void main(String[] args) throws Exception {
         Properties props = System.getProperties();
@@ -32,9 +35,8 @@ public class Verifier {
         String dateFromStr = args[1];
         String dateToStr = args[2];
         String period = args[3];
-
-        SSLContext sslContext = SSLContext.getInstance("TLS");
-        sslContext.init(null, trustAllCerts, new SecureRandom());
+        String maxInQueue = args[4];
+        Integer minutesToDelay = Integer.valueOf(args[5]);
 
         FileHandler handler = new FileHandler("verifier.log", true);
 
@@ -53,9 +55,9 @@ public class Verifier {
                 try {
                     logger.info("");
                     logger.info("Result verify: " + executeVerify(url,
-                            dateFrom, dateTo.isBefore(finalDateTo) ? dateTo : finalDateTo, logger, sslContext));
-                    logger.info("Result resendSale: " + executeResendSale(url, sslContext));
-                    logger.info("Result resendWin: " + executeResendWin(url, sslContext));
+                            dateFrom, dateTo.isBefore(finalDateTo) ? dateTo : finalDateTo, logger, minutesToDelay));
+                    logger.info("Result resendSale: " + executeResendSale(url, logger, maxInQueue, minutesToDelay));
+                    logger.info("Result resendWin: " + executeResendWin(url, logger, maxInQueue, minutesToDelay));
                 } catch (Exception e) {
                     logger.warning(e.getMessage());
                     continue;
@@ -70,6 +72,80 @@ public class Verifier {
 
     private static LocalDateTime plusPeriod(LocalDateTime dateFrom, String period) {
         return dateFrom.plus(Long.valueOf(period), ChronoUnit.MINUTES);
+    }
+
+    private static int executeVerify(String url, LocalDateTime dateFrom, LocalDateTime dateTo,
+                                     Logger logger, Integer minutesToDelay) throws Exception {
+        HttpClient client = HttpClient.newBuilder()
+                .sslContext(SSL_CONTEXT)
+                .build();
+
+        ObjectMapper objectMapper = new ObjectMapper();
+        Map<String, Object> map = Map.of("periodStart", dateFrom.format(dtf),
+                "periodEnd", dateTo.format(dtf));
+        String requestBody = objectMapper
+                .writerWithDefaultPrettyPrinter()
+                .writeValueAsString(map);
+        logger.info("Execute verify: " + requestBody);
+        HttpRequest request = HttpRequest.newBuilder(
+                        URI.create(url + "/api/v2/verify/make"))
+                .header("accept", "application/json")
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(requestBody))
+                .build();
+
+        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        int code = response.statusCode();
+        if (code != 200) {
+            logger.info("verify finished with error " + code + ", " + response.body());
+            TimeUnit.MINUTES.sleep(minutesToDelay);
+            executeVerify(url, dateFrom, dateTo, logger, minutesToDelay);
+        }
+        return code;
+    }
+
+    private static String executeResendSale(String url, Logger logger, String maxInQueue, Integer minutesToDelay)
+            throws Exception {
+        HttpClient client = HttpClient.newBuilder()
+                .sslContext(SSL_CONTEXT)
+                .build();
+
+        HttpRequest request = HttpRequest.newBuilder(
+                        URI.create(url + "/api/v1/fake/sale/auto?maxInQueue=" + maxInQueue))
+                .header("accept", "application/json")
+                .POST(HttpRequest.BodyPublishers.noBody())
+                .build();
+
+        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        int code = response.statusCode();
+        if (code != 200) {
+            logger.info("resendSale finished with error " + code + ", " + response.body());
+            TimeUnit.MINUTES.sleep(minutesToDelay);
+            executeResendSale(url, logger, maxInQueue, minutesToDelay);
+        }
+        return response.body();
+    }
+
+    private static String executeResendWin(String url, Logger logger, String maxInQueue, Integer minutesToDelay)
+            throws Exception {
+        HttpClient client = HttpClient.newBuilder()
+                .sslContext(SSL_CONTEXT)
+                .build();
+
+        HttpRequest request = HttpRequest.newBuilder(
+                        URI.create(url + "/api/v1/fake/win/auto?maxInQueue=" + maxInQueue))
+                .header("accept", "application/json")
+                .POST(HttpRequest.BodyPublishers.noBody())
+                .build();
+
+        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        int code = response.statusCode();
+        if (code != 200) {
+            logger.info("resendWin finished with error " + code + ", " + response.body());
+            TimeUnit.MINUTES.sleep(minutesToDelay);
+            executeResendWin(url, logger, maxInQueue, minutesToDelay);
+        }
+        return response.body();
     }
 
     private static TrustManager[] trustAllCerts = new TrustManager[]{
@@ -105,57 +181,12 @@ public class Verifier {
             }
     };
 
-    private static int executeVerify(String url, LocalDateTime dateFrom, LocalDateTime dateTo,
-                                     Logger logger, SSLContext sslContext) throws Exception {
-        HttpClient client = HttpClient.newBuilder()
-                .sslContext(sslContext)
-                .build();
-
-        ObjectMapper objectMapper = new ObjectMapper();
-        Map<String, Object> map = Map.of("periodStart", dateFrom.format(dtf),
-                "periodEnd", dateTo.format(dtf));
-        String requestBody = objectMapper
-                .writerWithDefaultPrettyPrinter()
-                .writeValueAsString(map);
-        logger.info("Execute verify: " + requestBody);
-        HttpRequest request = HttpRequest.newBuilder(
-                        URI.create(url + "/api/v2/verify/make"))
-                .header("accept", "application/json")
-                .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(requestBody))
-                .build();
-
-        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-        return response.statusCode();
-    }
-
-    private static String executeResendSale(String url, SSLContext sslContext) throws Exception {
-        HttpClient client = HttpClient.newBuilder()
-                .sslContext(sslContext)
-                .build();
-
-        HttpRequest request = HttpRequest.newBuilder(
-                        URI.create(url + "/api/v1/fake/sale/auto"))
-                .header("accept", "application/json")
-                .POST(HttpRequest.BodyPublishers.noBody())
-                .build();
-
-        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-        return response.body();
-    }
-
-    private static String executeResendWin(String url, SSLContext sslContext) throws Exception {
-        HttpClient client = HttpClient.newBuilder()
-                .sslContext(sslContext)
-                .build();
-
-        HttpRequest request = HttpRequest.newBuilder(
-                        URI.create(url + "/api/v1/fake/win/auto"))
-                .header("accept", "application/json")
-                .POST(HttpRequest.BodyPublishers.noBody())
-                .build();
-
-        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-        return response.body();
+    static {
+        try {
+            SSL_CONTEXT = SSLContext.getInstance("TLS");
+            SSL_CONTEXT.init(null, trustAllCerts, new SecureRandom());
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 }
