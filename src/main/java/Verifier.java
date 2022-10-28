@@ -1,4 +1,6 @@
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLEngine;
@@ -17,6 +19,7 @@ import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.Map;
 import java.util.Properties;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.FileHandler;
 import java.util.logging.Logger;
@@ -54,10 +57,11 @@ public class Verifier {
                 LocalDateTime dateTo = plusPeriod(dateFrom, period);
                 try {
                     logger.info("");
-                    logger.info("Result verify: " + executeVerify(url,
-                            dateFrom, dateTo.isBefore(finalDateTo) ? dateTo : finalDateTo, logger, minutesToDelay));
-                    logger.info("Result resendSale: " + executeResendSale(url, logger, maxInQueue, minutesToDelay));
-                    logger.info("Result resendWin: " + executeResendWin(url, logger, maxInQueue, minutesToDelay));
+                    UUID reviewId = executeVerify(url,
+                            dateFrom, dateTo.isBefore(finalDateTo) ? dateTo : finalDateTo, logger, minutesToDelay);
+                    logger.info("Result verify: " + reviewId);
+                    logger.info("Result resendSale: " + executeResendSale(url, reviewId, logger, maxInQueue, minutesToDelay));
+                    logger.info("Result resendWin: " + executeResendWin(url, reviewId, logger, maxInQueue, minutesToDelay));
                 } catch (Exception e) {
                     logger.warning(e.getMessage());
                     continue;
@@ -74,8 +78,8 @@ public class Verifier {
         return dateFrom.plus(Long.valueOf(period), ChronoUnit.MINUTES);
     }
 
-    private static int executeVerify(String url, LocalDateTime dateFrom, LocalDateTime dateTo,
-                                     Logger logger, Integer minutesToDelay) throws Exception {
+    private static UUID executeVerify(String url, LocalDateTime dateFrom, LocalDateTime dateTo,
+                                      Logger logger, Integer minutesToDelay) throws Exception {
         HttpClient client = HttpClient.newBuilder()
                 .sslContext(SSL_CONTEXT)
                 .build();
@@ -101,17 +105,20 @@ public class Verifier {
             TimeUnit.MINUTES.sleep(minutesToDelay);
             executeVerify(url, dateFrom, dateTo, logger, minutesToDelay);
         }
-        return code;
+        Gson gson = new GsonBuilder().create();
+        ReviewResponse reviewResponse = gson.fromJson(response.body(), ReviewResponse.class);
+        return reviewResponse.getReviewId();
     }
 
-    private static String executeResendSale(String url, Logger logger, String maxInQueue, Integer minutesToDelay)
-            throws Exception {
+    private static String executeResendSale(String url, UUID reviewId, Logger logger, String maxInQueue,
+                                            Integer minutesToDelay) throws Exception {
         HttpClient client = HttpClient.newBuilder()
                 .sslContext(SSL_CONTEXT)
                 .build();
 
         HttpRequest request = HttpRequest.newBuilder(
-                        URI.create(url + "/api/v1/fake/sale/auto?maxInQueue=" + maxInQueue))
+                        URI.create(url + "/api/v1/fake/sale/auto?reviewId=" + reviewId.toString() +
+                                "&maxInQueue=" + maxInQueue))
                 .header("accept", "application/json")
                 .POST(HttpRequest.BodyPublishers.noBody())
                 .build();
@@ -121,19 +128,20 @@ public class Verifier {
         if (code != 200) {
             logger.info("resendSale finished with error " + code + ", " + response.body());
             TimeUnit.MINUTES.sleep(minutesToDelay);
-            executeResendSale(url, logger, maxInQueue, minutesToDelay);
+            executeResendSale(url, reviewId, logger, maxInQueue, minutesToDelay);
         }
         return response.body();
     }
 
-    private static String executeResendWin(String url, Logger logger, String maxInQueue, Integer minutesToDelay)
-            throws Exception {
+    private static String executeResendWin(String url, UUID reviewId, Logger logger, String maxInQueue,
+                                           Integer minutesToDelay) throws Exception {
         HttpClient client = HttpClient.newBuilder()
                 .sslContext(SSL_CONTEXT)
                 .build();
 
         HttpRequest request = HttpRequest.newBuilder(
-                        URI.create(url + "/api/v1/fake/win/auto?maxInQueue=" + maxInQueue))
+                        URI.create(url + "/api/v1/fake/win/auto?reviewId=" + reviewId.toString() +
+                                "&maxInQueue=" + maxInQueue))
                 .header("accept", "application/json")
                 .POST(HttpRequest.BodyPublishers.noBody())
                 .build();
@@ -143,13 +151,31 @@ public class Verifier {
         if (code != 200) {
             logger.info("resendWin finished with error " + code + ", " + response.body());
             TimeUnit.MINUTES.sleep(minutesToDelay);
-            executeResendWin(url, logger, maxInQueue, minutesToDelay);
+            executeResendWin(url, reviewId, logger, maxInQueue, minutesToDelay);
         }
         return response.body();
     }
 
+    private class ReviewResponse {
+
+        private UUID reviewId;
+
+        public ReviewResponse(UUID reviewId) {
+            this.reviewId = reviewId;
+        }
+
+        public UUID getReviewId() {
+            return reviewId;
+        }
+
+        public void setReviewId(UUID reviewId) {
+            this.reviewId = reviewId;
+        }
+    }
+
     private static TrustManager[] trustAllCerts = new TrustManager[]{
             new X509ExtendedTrustManager() {
+
                 @Override
                 public java.security.cert.X509Certificate[] getAcceptedIssuers() {
                     return new java.security.cert.X509Certificate[0];
