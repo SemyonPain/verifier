@@ -68,7 +68,7 @@ public class Verifier {
                         logger.info("Result resendSale: " + executeResendSale(url, reviewId, logger, maxInQueue, minutesToDelay));
                         logger.info("Result resendWin: " + executeResendWin(url, reviewId, logger, maxInQueue, minutesToDelay));
                     } else {
-                        sb.append(reviewId.toString() + DELIM);
+                        sb.append("'" + reviewId.toString() + "'" + DELIM);
                     }
                 } catch (Exception e) {
                     logger.warning(e.getMessage());
