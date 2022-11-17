@@ -30,6 +30,8 @@ public class Verifier {
 
     private static final SSLContext SSL_CONTEXT;
 
+    private static final String DELIM = ", ";
+
     public static void main(String[] args) throws Exception {
         Properties props = System.getProperties();
         props.setProperty("jdk.internal.httpclient.disableHostnameVerification", Boolean.TRUE.toString());
@@ -40,6 +42,7 @@ public class Verifier {
         String period = args[3];
         String maxInQueue = args[4];
         Integer minutesToDelay = Integer.valueOf(args[5]);
+        boolean executeAutoCorrection = args.length > 6 && "true".equals(args[6]);
 
         FileHandler handler = new FileHandler("verifier.log", true);
 
@@ -52,6 +55,7 @@ public class Verifier {
         try {
             LocalDateTime dateFrom = LocalDateTime.from(dtf.parse(dateFromStr));
             LocalDateTime finalDateTo = LocalDateTime.from(dtf.parse(dateToStr));
+            StringBuilder sb = new StringBuilder("(");
 
             while (dateFrom.isBefore(finalDateTo)) {
                 LocalDateTime dateTo = plusPeriod(dateFrom, period);
@@ -59,15 +63,23 @@ public class Verifier {
                     logger.info("");
                     UUID reviewId = executeVerify(url,
                             dateFrom, dateTo.isBefore(finalDateTo) ? dateTo : finalDateTo, logger, minutesToDelay);
-                    logger.info("Result verify: " + reviewId);
-                    logger.info("Result resendSale: " + executeResendSale(url, reviewId, logger, maxInQueue, minutesToDelay));
-                    logger.info("Result resendWin: " + executeResendWin(url, reviewId, logger, maxInQueue, minutesToDelay));
+                    if (executeAutoCorrection) {
+                        logger.info("Result verify: " + reviewId);
+                        logger.info("Result resendSale: " + executeResendSale(url, reviewId, logger, maxInQueue, minutesToDelay));
+                        logger.info("Result resendWin: " + executeResendWin(url, reviewId, logger, maxInQueue, minutesToDelay));
+                    } else {
+                        sb.append(reviewId.toString() + DELIM);
+                    }
                 } catch (Exception e) {
                     logger.warning(e.getMessage());
                     continue;
                 } finally {
                     dateFrom = dateTo;
                 }
+            }
+            if (sb.length() > 1) {
+                sb.replace(sb.lastIndexOf(DELIM), sb.lastIndexOf(DELIM) + DELIM.length(), ")");
+                logger.info(sb.toString());
             }
         } catch (Exception e) {
             logger.warning(e.getMessage());
