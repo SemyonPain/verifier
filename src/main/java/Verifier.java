@@ -17,6 +17,8 @@ import java.security.cert.X509Certificate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.UUID;
@@ -43,6 +45,7 @@ public class Verifier {
         String maxInQueue = args[4];
         Integer minutesToDelay = Integer.valueOf(args[5]);
         boolean executeAutoCorrection = args.length > 6 && "true".equals(args[6]);
+        boolean commonMode = args.length > 7 && "true".equals(args[7]);
 
         FileHandler handler = new FileHandler("verifier.log", true);
 
@@ -56,17 +59,24 @@ public class Verifier {
             LocalDateTime dateFrom = LocalDateTime.from(dtf.parse(dateFromStr));
             LocalDateTime finalDateTo = LocalDateTime.from(dtf.parse(dateToStr));
             StringBuilder sb = new StringBuilder("(");
+            UUID globalReviewId = UUID.randomUUID();
+            List<UUID> reviewIds = new ArrayList<UUID>();
 
             while (dateFrom.isBefore(finalDateTo)) {
                 LocalDateTime dateTo = plusPeriod(dateFrom, period);
                 try {
                     logger.info("");
-                    UUID reviewId = executeVerify(url,
-                            dateFrom, dateTo.isBefore(finalDateTo) ? dateTo : finalDateTo, logger, minutesToDelay);
+                    UUID reviewId = executeVerify(url, dateFrom, dateTo.isBefore(finalDateTo) ? dateTo : finalDateTo,
+                            logger, minutesToDelay, commonMode, globalReviewId);
+                    reviewIds.add(reviewId);
                     if (executeAutoCorrection) {
                         logger.info("Result verify: " + reviewId);
-                        logger.info("Result resendSale: " + executeResendSale(url, reviewId, logger, maxInQueue, minutesToDelay));
-                        logger.info("Result resendWin: " + executeResendWin(url, reviewId, logger, maxInQueue, minutesToDelay));
+                        if (!commonMode) {
+                            logger.info("Result resendSale: " +
+                                    executeResendSale(url, reviewId, logger, maxInQueue, minutesToDelay, null));
+                            logger.info("Result resendWin: " +
+                                    executeResendWin(url, reviewId, logger, maxInQueue, minutesToDelay, null));
+                        }
                     } else {
                         sb.append("'" + reviewId.toString() + "'" + DELIM);
                     }
@@ -81,6 +91,15 @@ public class Verifier {
                 sb.replace(sb.lastIndexOf(DELIM), sb.lastIndexOf(DELIM) + DELIM.length(), ")");
                 logger.info(sb.toString());
             }
+
+            if (executeAutoCorrection && commonMode) {
+                for (UUID reviewId : reviewIds) {
+                    logger.info("Result resendSale: " +
+                            executeResendSale(url, reviewId, logger, maxInQueue, minutesToDelay, globalReviewId));
+                    logger.info("Result resendWin: " +
+                            executeResendWin(url, reviewId, logger, maxInQueue, minutesToDelay, globalReviewId));
+                }
+            }
         } catch (Exception e) {
             logger.warning(e.getMessage());
         }
@@ -90,8 +109,8 @@ public class Verifier {
         return dateFrom.plus(Long.valueOf(period), ChronoUnit.MINUTES);
     }
 
-    private static UUID executeVerify(String url, LocalDateTime dateFrom, LocalDateTime dateTo,
-                                      Logger logger, Integer minutesToDelay) throws Exception {
+    private static UUID executeVerify(String url, LocalDateTime dateFrom, LocalDateTime dateTo, Logger logger,
+                                      Integer minutesToDelay, boolean commonMode, UUID globalReviewId) throws Exception {
         HttpClient client = HttpClient.newBuilder()
                 .sslContext(SSL_CONTEXT)
                 .build();
@@ -103,8 +122,9 @@ public class Verifier {
                 .writerWithDefaultPrettyPrinter()
                 .writeValueAsString(map);
         logger.info("Execute verify: " + requestBody);
+        String urlParams = commonMode ? "?globalReviewId=" + globalReviewId : "";
         HttpRequest request = HttpRequest.newBuilder(
-                        URI.create(url + "/api/v2/verify/make"))
+                        URI.create(url + "/api/v2/verify/make" + urlParams))
                 .header("accept", "application/json")
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(requestBody))
@@ -115,7 +135,7 @@ public class Verifier {
         if (code != 200) {
             logger.info("verify finished with error " + code + ", " + response.body());
             TimeUnit.MINUTES.sleep(minutesToDelay);
-            executeVerify(url, dateFrom, dateTo, logger, minutesToDelay);
+            executeVerify(url, dateFrom, dateTo, logger, minutesToDelay, commonMode, globalReviewId);
         }
         Gson gson = new GsonBuilder().create();
         ReviewResponse reviewResponse = gson.fromJson(response.body(), ReviewResponse.class);
@@ -123,14 +143,15 @@ public class Verifier {
     }
 
     private static String executeResendSale(String url, UUID reviewId, Logger logger, String maxInQueue,
-                                            Integer minutesToDelay) throws Exception {
+                                            Integer minutesToDelay, UUID globalReviewId) throws Exception {
         HttpClient client = HttpClient.newBuilder()
                 .sslContext(SSL_CONTEXT)
                 .build();
 
+        String urlParams = globalReviewId == null ? "" : "&globalReviewId=" + globalReviewId;
         HttpRequest request = HttpRequest.newBuilder(
-                        URI.create(url + "/api/v1/fake/sale/auto?reviewId=" + reviewId.toString() +
-                                "&maxInQueue=" + maxInQueue))
+                        URI.create(url + "/api/v1/fake/sale/auto?reviewId=" + reviewId +
+                                "&maxInQueue=" + maxInQueue + urlParams))
                 .header("accept", "application/json")
                 .POST(HttpRequest.BodyPublishers.noBody())
                 .build();
@@ -140,20 +161,21 @@ public class Verifier {
         if (code != 200) {
             logger.info("resendSale finished with error " + code + ", " + response.body());
             TimeUnit.MINUTES.sleep(minutesToDelay);
-            executeResendSale(url, reviewId, logger, maxInQueue, minutesToDelay);
+            executeResendSale(url, reviewId, logger, maxInQueue, minutesToDelay, globalReviewId);
         }
         return response.body();
     }
 
     private static String executeResendWin(String url, UUID reviewId, Logger logger, String maxInQueue,
-                                           Integer minutesToDelay) throws Exception {
+                                           Integer minutesToDelay, UUID globalReviewId) throws Exception {
         HttpClient client = HttpClient.newBuilder()
                 .sslContext(SSL_CONTEXT)
                 .build();
 
+        String urlParams = globalReviewId == null ? "" : "&globalReviewId=" + globalReviewId;
         HttpRequest request = HttpRequest.newBuilder(
-                        URI.create(url + "/api/v1/fake/win/auto?reviewId=" + reviewId.toString() +
-                                "&maxInQueue=" + maxInQueue))
+                        URI.create(url + "/api/v1/fake/win/auto?reviewId=" + reviewId +
+                                "&maxInQueue=" + maxInQueue + urlParams))
                 .header("accept", "application/json")
                 .POST(HttpRequest.BodyPublishers.noBody())
                 .build();
@@ -163,7 +185,7 @@ public class Verifier {
         if (code != 200) {
             logger.info("resendWin finished with error " + code + ", " + response.body());
             TimeUnit.MINUTES.sleep(minutesToDelay);
-            executeResendWin(url, reviewId, logger, maxInQueue, minutesToDelay);
+            executeResendWin(url, reviewId, logger, maxInQueue, minutesToDelay, globalReviewId);
         }
         return response.body();
     }
